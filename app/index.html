@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>武汉大学招生 GraphRAG 问答</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --line:#262b36; --text:#e6e9ef;
+    --muted:#8b93a7; --accent:#4c8dff; --accent2:#22c55e; --warn:#f59e0b;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font:15px/1.7 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;}
+  header{padding:18px 22px;border-bottom:1px solid var(--line);
+         display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+         background:linear-gradient(180deg,#171a21,#12141a);}
+  header h1{font-size:17px;margin:0;font-weight:600;letter-spacing:.3px}
+  .badge{font-size:12px;color:var(--muted);border:1px solid var(--line);
+         padding:2px 9px;border-radius:99px}
+  #stats{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap}
+  main{max-width:920px;margin:0 auto;padding:22px 18px 140px}
+  .msg{margin:0 0 20px;display:flex;gap:12px}
+  .avatar{width:30px;height:30px;border-radius:8px;flex:none;display:grid;place-items:center;
+          font-size:13px;font-weight:700;background:#232838;color:var(--accent)}
+  .msg.user .avatar{background:#1f2a44;color:#8fb6ff}
+  .bubble{flex:1;min-width:0}
+  .role{font-size:12px;color:var(--muted);margin-bottom:5px}
+  .content{white-space:pre-wrap;word-break:break-word}
+  .msg.user .content{background:#1b2030;padding:11px 14px;border-radius:10px;border:1px solid var(--line)}
+  .typing::after{content:"▍";animation:blink 1s steps(2) infinite;color:var(--accent)}
+  @keyframes blink{50%{opacity:0}}
+  .sources{margin-top:12px;border-top:1px dashed var(--line);padding-top:10px}
+  .sources summary{cursor:pointer;color:var(--muted);font-size:13px;outline:none}
+  .src{display:flex;gap:8px;font-size:13px;margin:8px 0;align-items:flex-start}
+  .src .n{color:var(--accent);font-weight:600;flex:none}
+  .src a{color:#9cc0ff;text-decoration:none;border-bottom:1px dotted #3d5a8a}
+  .src .meta{color:var(--muted);font-size:12px}
+  .chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+  .chip{font-size:12px;background:#1c2434;color:#9fb4d8;border:1px solid #2a3548;
+        padding:2px 8px;border-radius:99px}
+  .via{font-size:11px;color:#5f6b82;margin-left:4px}
+  footer{position:fixed;left:0;right:0;bottom:0;background:rgba(15,17,21,.94);
+         border-top:1px solid var(--line);padding:14px 18px;backdrop-filter:blur(8px)}
+  .inbar{max-width:920px;margin:0 auto;display:flex;gap:10px}
+  textarea{flex:1;resize:none;height:48px;padding:12px 14px;border-radius:10px;
+           border:1px solid var(--line);background:#12151c;color:var(--text);
+           font:inherit;outline:none}
+  textarea:focus{border-color:#35507f}
+  button{width:92px;border:none;border-radius:10px;background:var(--accent);color:#fff;
+         font:inherit;font-weight:600;cursor:pointer}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  .hint{max-width:920px;margin:8px auto 0;color:var(--muted);font-size:12px}
+  .ex{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+  .ex button{width:auto;background:#1b2230;color:#a8bde0;font-weight:400;
+             padding:6px 12px;font-size:13px;border:1px solid var(--line)}
+</style>
+</head>
+<body>
+<header>
+  <h1>武汉大学招生 · GraphRAG 问答</h1>
+  <span class="badge">本地 Qwen2.5-1.5B</span>
+  <span class="badge">图谱 + 向量 + BM25</span>
+  <div id="stats"></div>
+</header>
+
+<main id="chat">
+  <div class="msg assistant">
+    <div class="avatar">武</div>
+    <div class="bubble">
+      <div class="role">助手</div>
+      <div class="content">你好，我是武汉大学招生信息助手。我的知识来自学校官网公开的本科招生、研究生招生和学院介绍页面，可以回答报考条件、招生专业、时间安排、分数线等问题，并给出原文出处。</div>
+      <div class="ex">
+        <button onclick="ask('武汉大学2026年强基计划有哪些专业？')">2026 强基计划专业</button>
+        <button onclick="ask('硕士研究生报名时间是什么时候？')">硕士报名时间</button>
+        <button onclick="ask('计算机学院简介')">计算机学院简介</button>
+        <button onclick="ask('博士研究生的报考条件是什么？')">博士报考条件</button>
+      </div>
+    </div>
+  </div>
+</main>
+
+<footer>
+  <div class="inbar">
+    <textarea id="q" placeholder="输入你的问题，例如：强基计划怎么报名？（Enter 发送，Shift+Enter 换行）"></textarea>
+    <button id="send" onclick="ask()">发送</button>
+  </div>
+  <div class="hint">本地 CPU 推理，首个字通常需要 30–60 秒（模型在 2 核上预填上下文），请耐心等待。回答可能出错，请以文末链接的官网原文为准。</div>
+</footer>
+
+<script>
+const chat = document.getElementById('chat');
+const qEl = document.getElementById('q');
+const sendBtn = document.getElementById('send');
+let busy = false;
+const history = [];
+
+fetch('/api/stats').then(r=>r.json()).then(s=>{
+  document.getElementById('stats').innerHTML =
+    `<span class="badge">${s.pages} 页面</span>
+     <span class="badge">${s.chunks} 片段</span>
+     <span class="badge">${s.entities} 实体</span>
+     <span class="badge">${s.vectors} 向量</span>`;
+}).catch(()=>{});
+
+qEl.addEventListener('keydown', e=>{
+  if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); ask(); }
+});
+
+function el(tag, cls, html){ const d=document.createElement(tag); if(cls)d.className=cls; if(html!=null)d.innerHTML=html; return d; }
+
+function addUser(text){
+  const m = el('div','msg user');
+  m.innerHTML = `<div class="avatar">我</div><div class="bubble"><div class="role">你</div>
+                 <div class="content"></div></div>`;
+  m.querySelector('.content').textContent = text;
+  chat.appendChild(m);
+}
+
+function addAssistant(){
+  const m = el('div','msg assistant');
+  m.innerHTML = `<div class="avatar">武</div><div class="bubble"><div class="role">助手</div>
+                 <div class="content typing"></div><div class="sources" hidden></div></div>`;
+  chat.appendChild(m);
+  return m;
+}
+
+async function ask(preset){
+  if(busy) return;
+  const text = (preset ?? qEl.value).trim();
+  if(!text) return;
+  qEl.value=''; busy=true; sendBtn.disabled=true;
+
+  addUser(text);
+  history.push({role:'user', content:text});
+  const node = addAssistant();
+  const contentEl = node.querySelector('.content');
+  const srcEl = node.querySelector('.sources');
+  contentEl.textContent = '正在检索并生成（CPU 推理，约 30–60 秒）…';
+  let answer = '';
+  let firstToken = true;
+
+  try{
+    const res = await fetch('/api/chat', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({query:text, history: history.slice(0,-1)})
+    });
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    while(true){
+      const {value, done} = await reader.read();
+      if(done) break;
+      buf += dec.decode(value, {stream:true});
+      const parts = buf.split('\n\n');
+      buf = parts.pop();
+      for(const part of parts){
+        const ev = /event: (\w+)/.exec(part);
+        const dataLine = /data: ([\s\S]*)/.exec(part);
+        if(!ev || !dataLine) continue;
+        const type = ev[1];
+        let payload;
+        try{ payload = JSON.parse(dataLine[1]); }catch(e){ continue; }
+        if(type==='meta'){ renderSources(srcEl, payload); }
+        else if(type==='token'){
+          if(firstToken){ contentEl.textContent = ''; firstToken = false; }
+          answer += payload.t; contentEl.textContent = answer;
+          window.scrollTo(0, document.body.scrollHeight);
+        }
+      }
+    }
+  }catch(e){
+    contentEl.textContent = answer + '\n[请求失败：'+e.message+']';
+  }finally{
+    contentEl.classList.remove('typing');
+    history.push({role:'assistant', content:answer});
+    busy=false; sendBtn.disabled=false;
+    window.scrollTo(0, document.body.scrollHeight);
+  }
+}
+
+function renderSources(box, meta){
+  const srcs = meta.sources || [];
+  const ents = meta.entities || [];
+  let html = `<details><summary>依据 ${srcs.length} 条资料${ents.length? ' · 命中实体：'+ents.join('、') : ''}</summary>`;
+  srcs.forEach(s=>{
+    html += `<div class="src"><span class="n">[${s.n}]</span><div>
+      <a href="${s.url}" target="_blank" rel="noopener">${escapeHtml(s.title || s.url)}</a>
+      <div class="meta">${s.category}${s.date? ' · '+s.date:''}
+        <span class="via">${(s.via||[]).join('/')}</span></div></div></div>`;
+  });
+  html += `</details>`;
+  if(ents.length){
+    html += `<div class="chips">` + ents.map(e=>`<span class="chip">${escapeHtml(e)}</span>`).join('') + `</div>`;
+  }
+  box.innerHTML = html;
+  box.hidden = false;
+}
+
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+</script>
+</body>
+</html>
